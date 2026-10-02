@@ -1,40 +1,20 @@
-import { runAgent } from "./agent.js";
+import { supervisor } from "./agents/supervisor.js";
 
-const question = process.argv.slice(2).join(" ");
+const userMessage = process.argv.slice(2).join(" ");
 
-if (!question) {
-  console.log(
-    'Usage: npm start -- "your question"'
-  );
-
+if (!userMessage) {
+  console.log('Usage: npm start -- "your question"');
   process.exit(1);
 }
 
 try {
-  const answer = await runAgent(question);
+  console.log("\nUser:", userMessage);
+
+  const result = await supervisor(userMessage);
 
   console.log("\nFinal Answer:");
-  console.log(answer);
+  console.log(result);
 } catch (error) {
-  console.error("\nError:", error.message);
+  console.error("\nAgent Error:");
+  console.error(error.message);
 }
-
-/*
-import { runAgent } from "./agent.js";
-
-const question = process.argv.slice(2).join(" ");
-
-if (!question) {
-  console.log('Usage: npm start -- "What is 125 * 48?"');
-  process.exit(1);
-}
-
-try {
-  const answer = await runAgent(question);
-
-  console.log("\nFinal Answer:");
-  console.log(answer);
-} catch (error) {
-  console.error("Agent Error:", error.message);
-}
-*/

@@ -1,139 +1,136 @@
 import ollama from "ollama";
+
+import { createPlan } from "./planner.js";
 import { mathAgent } from "./mathAgent.js";
 import { weatherAgent } from "./weatherAgent.js";
 import { researchAgent } from "./researchAgent.js";
 
 const agents = {
-    math: mathAgent,
-    weather: weatherAgent,
-    research: researchAgent
+  math_agent: mathAgent,
+  weather_agent: weatherAgent,
+  research_agent: researchAgent
 };
 
-const tools = [
-    {
-        type: "function",
-        function: {
-            name: "math_agent",
-            description: "Delegate mathematical questions to the Math Agent",
-            parameters: {
-                type: "object",
-                properties: {
-                    question: {
-                        type: "string"
-                    }
-                },
-                required: ["question"]
-            }
-        }
-    },
-
-    {
-        type: "function",
-        function: {
-            name: "weather_agent",
-            description: "Delegate weather questions to the Weather Agent",
-            parameters: {
-                type: "object",
-                properties: {
-                    question: {
-                        type: "string"
-                    }
-                },
-                required: ["question"]
-            }
-        }
-    },
-
-    {
-        type: "function",
-        function: {
-            name: "research_agent",
-            description: "Delegate research questions to the Research Agent",
-            parameters: {
-                type: "object",
-                properties: {
-                    question: {
-                        type: "string"
-                    }
-                },
-                required: ["question"]
-            }
-        }
-    }
-];
-
 export async function supervisor(userMessage) {
-    const messages = [
-        {
-            role: "system",
-            content: `
-You are a Supervisor Agent.
 
-Your job is to understand the user's request
-and delegate it to the appropriate specialized agent.
+  // --------------------------------
+  // 1. PLAN
+  // --------------------------------
 
-Available agents:
+  const plan = await createPlan(userMessage);
 
-1. math_agent
-   Handles mathematical questions.
+  console.log("\nTask Plan:");
+  console.dir(plan, { depth: null });
 
-2. weather_agent
-   Handles weather questions.
+  if (!plan.tasks || !Array.isArray(plan.tasks)) {
+    throw new Error("Invalid task plan");
+  }
 
-3. research_agent
-   Handles research questions.
+  // --------------------------------
+  // 2. EXECUTE IN PARALLEL
+  // --------------------------------
 
-Do not perform the task yourself when a specialized
-agent is available.
-`
-        },
+  console.log(
+    `\nExecuting ${plan.tasks.length} task(s) in parallel...\n`
+  );
 
-        {
-            role: "user",
-            content: userMessage
-        }
-    ];
+  const tasks = plan.tasks.map(async (task) => {
 
-    while (true) {
-        const response = await ollama.chat({
-            model: "gpt-oss:120b-cloud",
-            messages,
-            tools
-        });
+    const agent = agents[task.agent];
 
-        const assistantMessage = response.message;
-
-        console.log("Assistant message for Supervisor Agent : ", assistantMessage);
-
-        messages.push(assistantMessage);
-
-        if (!assistantMessage.tool_calls?.length) {
-            return assistantMessage.content;
-        }
-
-        for (const toolCall of assistantMessage.tool_calls) {
-            const name = toolCall.function.name;
-            const args = toolCall.function.arguments;
-
-            let result;
-
-            if (name === "math_agent") {
-                result = await agents.math(args.question);
-            }
-
-            if (name === "weather_agent") {
-                result = await agents.weather(args.question);
-            }
-
-            if (name === "research_agent") {
-                result = await agents.research(args.question);
-            }
-
-            messages.push({
-                role: "tool",
-                tool_name: name,
-                content: result
-            });
-        }
+    if (!agent) {
+      throw new Error(
+        `Unknown agent: ${task.agent}`
+      );
     }
+
+    console.log(
+      `Starting: ${task.agent}`
+    );
+
+    try {
+
+      const result = await agent(task.question);
+
+      console.log(
+        `Finished: ${task.agent}`
+      );
+
+      return {
+        agent: task.agent,
+        question: task.question,
+        result,
+        success: true
+      };
+
+    } catch (error) {
+
+      console.error(
+        `Failed: ${task.agent}`,
+        error.message
+      );
+
+      return {
+        agent: task.agent,
+        question: task.question,
+        result: null,
+        success: false,
+        error: error.message
+      };
+    }
+  });
+
+  const results = await Promise.all(tasks);
+
+  // --------------------------------
+  // 3. COMBINE RESULTS
+  // --------------------------------
+
+  console.log("\nAgent Results:");
+  console.dir(results, { depth: null });
+
+  const finalPrompt = `
+The user asked:
+
+${userMessage}
+
+The specialized agents produced these results:
+
+${JSON.stringify(results, null, 2)}
+
+Create one clear final answer.
+
+Rules:
+
+- Include every successful result.
+- If an agent failed, clearly mention that part could not be completed.
+- Do not invent missing information.
+- Do not perform new research.
+`;
+
+  // --------------------------------
+  // 4. FINAL LLM
+  // --------------------------------
+
+  const finalResponse = await ollama.chat({
+    model: "gpt-oss:120b-cloud",
+
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are the final response generator."
+      },
+
+      {
+        role: "user",
+        content: finalPrompt
+      }
+    ]
+  });
+
+  console.log("\nFinal Ollama Response:");
+  console.dir(finalResponse.message, { depth: null });
+
+  return finalResponse.message.content;
 }

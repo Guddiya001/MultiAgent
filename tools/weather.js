@@ -14,7 +14,7 @@ export async function getWeather(city) {
 
   const geoData = await geoResponse.json();
 
-  console.log("Geo Data:", geoData);
+  //console.log("Geo Data:", geoData);
 
   if (!geoData.results?.length) {
     throw new Error(`Location not found: ${city}`);

@@ -5,7 +5,7 @@ export async function searchWeb(query) {
 
   const response = await fetch(url);
 
-  console.log("DuckDuckGo API response status:", response, "\n for query:", query);
+  //console.log("DuckDuckGo API response status:", response, "\n for query:", query);
 
   if (!response.ok) {
     throw new Error("Search request failed");

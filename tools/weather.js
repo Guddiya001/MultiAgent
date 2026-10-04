@@ -48,5 +48,5 @@ export async function getWeather(city) {
   };
 }
 
-const result = await getWeather("Delhi");
-console.log("Weather Module Loaded", result);
+//const result = await getWeather("Delhi");
+//console.log("Weather Module Loaded", result);

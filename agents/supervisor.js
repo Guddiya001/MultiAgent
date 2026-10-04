@@ -5,132 +5,347 @@ import { mathAgent } from "./mathAgent.js";
 import { weatherAgent } from "./weatherAgent.js";
 import { researchAgent } from "./researchAgent.js";
 
+
 const agents = {
   math_agent: mathAgent,
   weather_agent: weatherAgent,
   research_agent: researchAgent
 };
 
+
 export async function supervisor(userMessage) {
 
-  // --------------------------------
-  // 1. PLAN
-  // --------------------------------
+  console.log("\n==============================");
+  console.log("LEVEL 8 SUPERVISOR");
+  console.log("==============================");
+
+
+  // =================================
+  // STEP 1
+  // Create execution plan
+  // =================================
+
+  console.log("\n1. Creating execution plan...");
 
   const plan = await createPlan(userMessage);
 
-  console.log("\nTask Plan:");
+  console.log("\nExecution Plan:");
+
   console.dir(plan, { depth: null });
 
-  if (!plan.tasks || !Array.isArray(plan.tasks)) {
-    throw new Error("Invalid task plan");
+
+  // =================================
+  // STEP 2
+  // Validate plan
+  // =================================
+
+  if (
+    !plan.tasks ||
+    !Array.isArray(plan.tasks)
+  ) {
+    throw new Error(
+      "Planner returned an invalid task list"
+    );
   }
 
-  // --------------------------------
-  // 2. EXECUTE IN PARALLEL
-  // --------------------------------
 
-  console.log(
-    `\nExecuting ${plan.tasks.length} task(s) in parallel...\n`
-  );
+  // =================================
+  // STEP 3
+  // Store task results
+  // =================================
 
-  const tasks = plan.tasks.map(async (task) => {
+  const results = [];
 
-    const agent = agents[task.agent];
+  const completedTasks = new Set();
 
-    if (!agent) {
-      throw new Error(
-        `Unknown agent: ${task.agent}`
-      );
-    }
 
-    console.log(
-      `Starting: ${task.agent}`
-    );
+  // =================================
+  // STEP 4
+  // Execute dependency-aware tasks
+  // =================================
 
-    try {
+  console.log("\n2. Executing tasks...");
 
-      const result = await agent(task.question);
 
-      console.log(
-        `Finished: ${task.agent}`
-      );
+  while (
+    completedTasks.size < plan.tasks.length
+  ) {
 
-      return {
-        agent: task.agent,
-        question: task.question,
-        result,
-        success: true
-      };
+    let progress = false;
 
-    } catch (error) {
 
-      console.error(
-        `Failed: ${task.agent}`,
-        error.message
-      );
+    for (const task of plan.tasks) {
 
-      return {
-        agent: task.agent,
-        question: task.question,
-        result: null,
-        success: false,
-        error: error.message
-      };
-    }
-  });
+      // Already completed
+      if (completedTasks.has(task.id)) {
+        continue;
+      }
 
-  const results = await Promise.all(tasks);
 
-  // --------------------------------
-  // 3. COMBINE RESULTS
-  // --------------------------------
+      // ---------------------------------
+      // Check dependencies
+      // ---------------------------------
 
-  console.log("\nAgent Results:");
-  console.dir(results, { depth: null });
+      const dependencies =
+        task.dependsOn || [];
 
-  const finalPrompt = `
-The user asked:
+
+      const dependenciesCompleted =
+        dependencies.every(
+          (dependencyId) =>
+            completedTasks.has(dependencyId)
+        );
+
+
+      // Dependencies not ready
+      if (!dependenciesCompleted) {
+
+        console.log(
+          `Task ${task.id} waiting for:`,
+          dependencies.filter(
+            (id) =>
+              !completedTasks.has(id)
+          )
+        );
+
+        continue;
+      }
+
+
+      // ---------------------------------
+      // Find agent
+      // ---------------------------------
+
+      const agent =
+        agents[task.agent];
+
+
+      if (!agent) {
+
+        results.push({
+
+          taskId: task.id,
+
+          agent: task.agent,
+
+          question: task.question,
+
+          success: false,
+
+          error:
+            `Unknown agent: ${task.agent}`
+
+        });
+
+
+        completedTasks.add(task.id);
+
+        progress = true;
+
+        continue;
+      }
+
+
+      // ---------------------------------
+      // Prepare dependency results
+      // ---------------------------------
+
+      const dependencyResults =
+        results.filter(
+          (result) =>
+            dependencies.includes(
+              result.taskId
+            )
+        );
+
+
+      // ---------------------------------
+      // Build agent input
+      // ---------------------------------
+
+      const agentInput = `
+
+Original user request:
 
 ${userMessage}
 
-The specialized agents produced these results:
 
-${JSON.stringify(results, null, 2)}
+Your task:
 
-Create one clear final answer.
+${task.question}
+
+
+Results from previous tasks:
+
+${JSON.stringify(
+  dependencyResults,
+  null,
+  2
+)}
+
+Use the previous task results
+when required.
+
+Do not invent missing information.
+
+`;
+
+
+      // ---------------------------------
+      // Execute agent
+      // ---------------------------------
+
+      console.log(
+        `\nStarting Task ${task.id}: ${task.agent}`
+      );
+
+
+      try {
+
+        const result =
+          await agent(agentInput);
+
+
+        console.log(
+          `Finished Task ${task.id}`
+        );
+
+
+        results.push({
+
+          taskId: task.id,
+
+          agent: task.agent,
+
+          question: task.question,
+
+          result,
+
+          success: true
+
+        });
+
+
+      } catch (error) {
+
+        console.error(
+          `Task ${task.id} failed:`,
+          error.message
+        );
+
+
+        results.push({
+
+          taskId: task.id,
+
+          agent: task.agent,
+
+          question: task.question,
+
+          result: null,
+
+          success: false,
+
+          error: error.message
+
+        });
+
+      }
+
+
+      completedTasks.add(task.id);
+
+      progress = true;
+
+    }
+
+
+    // =================================
+    // Safety check
+    // =================================
+
+    if (!progress) {
+
+      throw new Error(
+        "Workflow cannot continue. There may be a circular or unresolved dependency."
+      );
+
+    }
+
+  }
+
+
+  // =================================
+  // STEP 5
+  // Final Agent
+  // =================================
+
+  console.log(
+    "\n3. Generating final response..."
+  );
+
+
+  const finalResponse =
+    await ollama.chat({
+
+      model: "gpt-oss:120b-cloud",
+
+      messages: [
+
+        {
+          role: "system",
+
+          content: `
+You are the final response agent.
+
+Combine the results from the
+specialized agents into one clear answer.
 
 Rules:
 
-- Include every successful result.
-- If an agent failed, clearly mention that part could not be completed.
-- Do not invent missing information.
-- Do not perform new research.
-`;
+1. Answer the original user request.
+2. Include successful results.
+3. Clearly mention failed tasks.
+4. Do not invent information.
+5. Do not perform new research.
+6. Use dependency results when relevant.
+`
+        },
 
-  // --------------------------------
-  // 4. FINAL LLM
-  // --------------------------------
+        {
+          role: "user",
 
-  const finalResponse = await ollama.chat({
-    model: "gpt-oss:120b-cloud",
+          content: `
 
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are the final response generator."
-      },
+Original user request:
 
-      {
-        role: "user",
-        content: finalPrompt
-      }
-    ]
-  });
+${userMessage}
 
-  console.log("\nFinal Ollama Response:");
-  console.dir(finalResponse.message, { depth: null });
+
+Execution plan:
+
+${JSON.stringify(
+  plan,
+  null,
+  2
+)}
+
+
+Agent results:
+
+${JSON.stringify(
+  results,
+  null,
+  2
+)}
+
+`
+        }
+
+      ]
+
+    });
+
 
   return finalResponse.message.content;
 }

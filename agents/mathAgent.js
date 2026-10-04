@@ -1,73 +1,43 @@
 import ollama from "ollama";
-import { calculator } from "../tools/calculator.js";
 
-const tools = [
-  {
-    type: "function",
-    function: {
-      name: "calculator",
-      description: "Calculate a mathematical expression",
-      parameters: {
-        type: "object",
-        properties: {
-          expression: {
-            type: "string",
-            description: "Mathematical expression"
-          }
-        },
-        required: ["expression"]
-      }
-    }
-  }
-];
-
-export async function mathAgent(userMessage) {
-  const messages = [
-    {
-      role: "system",
-      content: `
-You are a Math Agent.
-
-Your responsibility is only mathematics.
-
-Use the calculator tool when calculation is required.
-
-Return a clear mathematical answer.
-`
-    },
-    {
-      role: "user",
-      content: userMessage
-    }
-  ];
-
-  while (true) {
+export async function mathAgent(question) {
+  try {
     const response = await ollama.chat({
       model: "gpt-oss:120b-cloud",
-      messages,
-      tools
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a Math Agent.
+
+Perform calculations using the data provided by the workflow.
+
+Rules:
+
+1. Use only the numeric data provided.
+2. Never invent a number.
+3. Never create an illustrative example.
+4. Never replace missing data with an estimate.
+5. If required data is missing, return:
+
+ERROR: Missing required numeric data
+
+For USD/INR conversion:
+
+USD = INR amount / USD_INR rate
+
+Return the calculation clearly.
+`
+        },
+        {
+          role: "user",
+          content: question
+        }
+      ]
     });
 
-    const assistantMessage = response.message;
-
-    console.log("Assistant message for Math Agent : ", assistantMessage);
-
-    messages.push(assistantMessage);
-
-    if (!assistantMessage.tool_calls?.length) {
-      return assistantMessage.content;
-    }
-
-    for (const toolCall of assistantMessage.tool_calls) {
-      const args = toolCall.function.arguments;
-
-      const result = calculator(args.expression);
-
-      messages.push({
-        role: "tool",
-        tool_name: "calculator",
-        content: JSON.stringify(result)
-      });
-    }
+    return response.message.content;
+  } catch (error) {
+    throw new Error(`Math Agent failed: ${error.message}`);
   }
 }

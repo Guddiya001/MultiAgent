@@ -1,21 +1,47 @@
 export async function searchWeb(query) {
+
   const url =
     `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}` +
-    `&format=json&no_html=1&skip_disambig=1`;
+    `&format=json` +
+    `&no_html=1` +
+    `&skip_disambig=1`;
 
-  const response = await fetch(url);
+console.log(
+  `Searching web for: ${url}`
+  );
+  const response =
+    await fetch(url);
 
-  //console.log("DuckDuckGo API response status:", response, "\n for query:", query);
 
   if (!response.ok) {
-    throw new Error("Search request failed");
+
+    throw new Error(
+      "Search request failed"
+    );
+
   }
 
-  const data = await response.json();
+
+  const data =
+    await response.json();
+
 
   return {
+
     query,
-    abstract: data.AbstractText || "No summary found",
-    source: data.AbstractURL || null
+
+    abstract:
+      data.AbstractText ||
+      "No summary found",
+
+    source:
+      data.AbstractURL ||
+      null
+
   };
+
 }
+
+const webData = await searchWeb("USD to INR exchange rate");
+console.log(webData);
+

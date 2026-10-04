@@ -1,7 +1,7 @@
 import ollama from "ollama";
-
 import { researchAgent } from "../agents/researchAgent.js";
 import { mathAgent } from "../agents/mathAgent.js";
+import { sleep } from "../utils/retry.js";
 
 
 /**
@@ -59,8 +59,10 @@ function validateExchangeRate(result) {
 /**
  * Research with retry
  */
-async function researchExchangeRate(maxRetries = 2) {
-
+async function researchExchangeRate(
+  maxRetries = 3,
+  baseDelay = 1000
+) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
 
     console.log(
@@ -77,8 +79,6 @@ I specifically need:
 - numeric exchange rate
 - unit
 - source
-
-Important:
 
 Do NOT provide an example.
 
@@ -98,7 +98,8 @@ If you cannot obtain a reliable rate, return:
     console.log("\nResearch Result:");
     console.dir(result, { depth: null });
 
-    const validation = validateExchangeRate(result);
+    const validation =
+      validateExchangeRate(result);
 
     if (validation.valid) {
 
@@ -113,9 +114,20 @@ If you cannot obtain a reliable rate, return:
       `\n❌ Validation failed: ${validation.error}`
     );
 
-    if (attempt < maxRetries) {
-      console.log("\nRetrying Research Agent...");
+    // No retry after the final attempt
+    if (attempt === maxRetries) {
+      break;
     }
+
+    // Exponential backoff
+    const delay =
+      baseDelay * Math.pow(2, attempt - 1);
+
+    console.log(
+      `\n⏳ Waiting ${delay / 1000} second(s) before retry...`
+    );
+
+    await sleep(delay);
   }
 
   throw new Error(

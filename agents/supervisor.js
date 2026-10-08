@@ -16,7 +16,7 @@ const agents = {
 export async function supervisor(userMessage) {
 
   console.log("\n==============================");
-  console.log("LEVEL 8.4 PARALLEL DAG");
+  console.log("LEVEL 8.5 WORKFLOW");
   console.log("==============================");
 
 
@@ -33,75 +33,147 @@ export async function supervisor(userMessage) {
   console.dir(plan, { depth: null });
 
 
-  if (
-    !plan.tasks ||
-    !Array.isArray(plan.tasks)
-  ) {
-    throw new Error(
-      "Planner returned an invalid task list"
-    );
+  // =====================================
+  // 2. VALIDATE PLAN
+  // =====================================
+
+  validatePlan(plan);
+
+
+  // =====================================
+  // 3. CREATE WORKFLOW STATE
+  // =====================================
+
+  const taskState = new Map();
+
+  for (const task of plan.tasks) {
+
+    taskState.set(task.id, {
+      status: "PENDING",
+      result: null,
+      error: null
+    });
+
   }
 
 
   // =====================================
-  // 2. WORKFLOW STATE
+  // 4. EXECUTE DAG
   // =====================================
 
-  const completedTasks = new Set();
-
-  const results = [];
-
-
-  // =====================================
-  // 3. DAG EXECUTION
-  // =====================================
-
-  console.log("\n2. Starting DAG execution...");
+  console.log("\n2. Starting workflow...");
 
 
   while (
-    completedTasks.size < plan.tasks.length
+    [...taskState.values()]
+      .some(
+        (state) =>
+          state.status === "PENDING"
+      )
   ) {
 
-    // -------------------------------------
-    // Find tasks ready to execute
-    // -------------------------------------
-
-    const readyTasks = plan.tasks.filter(
-      (task) => {
-
-        // Already completed
-        if (completedTasks.has(task.id)) {
-          return false;
-        }
+    const readyTasks = [];
 
 
-        // Dependencies
-        const dependencies =
-          task.dependsOn || [];
+    // ===================================
+    // Find READY tasks
+    // ===================================
+
+    for (const task of plan.tasks) {
+
+      const state =
+        taskState.get(task.id);
 
 
-        // Check whether every dependency
-        // has completed
-        return dependencies.every(
-          (dependencyId) =>
-            completedTasks.has(dependencyId)
+      if (state.status !== "PENDING") {
+        continue;
+      }
+
+
+      const dependencies =
+        task.dependsOn || [];
+
+
+      // -------------------------------
+      // Check dependency states
+      // -------------------------------
+
+      const dependencyStates =
+        dependencies.map(
+          (id) =>
+            taskState.get(id)
         );
 
+
+      // Dependency failed/skipped
+      const dependencyFailed =
+        dependencyStates.some(
+          (dependency) =>
+            dependency.status === "FAILED" ||
+            dependency.status === "SKIPPED"
+        );
+
+
+      if (dependencyFailed) {
+
+        state.status = "SKIPPED";
+
+        state.error =
+          "Skipped because a dependency failed.";
+
+        console.log(
+          `⏭️ Task ${task.id} skipped`
+        );
+
+        continue;
       }
-    );
 
 
-    // -------------------------------------
-    // Safety check
-    // -------------------------------------
+      // Dependencies not finished
+      const dependenciesComplete =
+        dependencyStates.every(
+          (dependency) =>
+            dependency.status === "SUCCESS"
+        );
+
+
+      if (!dependenciesComplete) {
+        continue;
+      }
+
+
+      // Task is ready
+      state.status = "READY";
+
+      readyTasks.push(task);
+
+    }
+
+
+    // =====================================
+    // No ready tasks
+    // =====================================
 
     if (readyTasks.length === 0) {
 
-      throw new Error(
-        "No executable tasks found. " +
-        "Possible circular or unresolved dependency."
-      );
+      const pendingTasks =
+        plan.tasks.filter(
+          (task) =>
+            taskState.get(task.id)
+              .status === "PENDING"
+        );
+
+
+      if (pendingTasks.length > 0) {
+
+        throw new Error(
+          "Workflow is stuck. " +
+          "Possible circular dependency."
+        );
+
+      }
+
+      break;
 
     }
 
@@ -114,7 +186,7 @@ export async function supervisor(userMessage) {
 
 
     // =====================================
-    // 4. EXECUTE READY TASKS IN PARALLEL
+    // Execute READY tasks in parallel
     // =====================================
 
     const roundResults =
@@ -122,6 +194,13 @@ export async function supervisor(userMessage) {
 
         readyTasks.map(
           async (task) => {
+
+            const state =
+              taskState.get(task.id);
+
+
+            state.status = "RUNNING";
+
 
             console.log(
               `Starting Task ${task.id}: ${task.agent}`
@@ -132,67 +211,74 @@ export async function supervisor(userMessage) {
               agents[task.agent];
 
 
+            // -------------------------------
+            // Unknown agent
+            // -------------------------------
+
             if (!agent) {
 
+              state.status = "FAILED";
+
+              state.error =
+                `Unknown agent: ${task.agent}`;
+
               return {
-
                 taskId: task.id,
-
-                agent: task.agent,
-
-                success: false,
-
-                error:
-                  `Unknown agent: ${task.agent}`
-
+                success: false
               };
 
             }
 
 
-            // ---------------------------------
-            // Get dependency results
-            // ---------------------------------
+            // -------------------------------
+            // Dependency results
+            // -------------------------------
 
             const dependencyResults =
-              results.filter(
-                (result) =>
-                  (task.dependsOn || [])
-                    .includes(result.taskId)
+              (task.dependsOn || []).map(
+                (dependencyId) => {
+
+                  const dependencyTask =
+                    taskState.get(
+                      dependencyId
+                    );
+
+                  return {
+                    taskId: dependencyId,
+                    result:
+                      dependencyTask.result
+                  };
+
+                }
               );
 
 
-            // ---------------------------------
-            // Build agent input
-            // ---------------------------------
-
             const agentInput = `
 
-                  Original user request:
+                    Original user request:
 
-                  ${userMessage}
-
-
-                  Your task:
-
-                  ${task.question}
+                    ${userMessage}
 
 
-                  Results from dependent tasks:
+                    Your task:
 
-                  ${JSON.stringify(
-              dependencyResults,
-              null,
-              2
-            )}
+                    ${task.question}
 
 
-                  Use the dependent task results
-                  when required.
+                    Results from dependent tasks:
 
-                  Do not invent missing information.
+                    ${JSON.stringify(
+                                  dependencyResults,
+                                  null,
+                                  2
+                                )}
 
-                  `;
+
+                    Use dependency results when required.
+
+                    Do not invent missing information.
+
+                    `;
 
 
             try {
@@ -201,47 +287,40 @@ export async function supervisor(userMessage) {
                 await agent(agentInput);
 
 
+              state.status = "SUCCESS";
+
+              state.result = result;
+
+
               console.log(
-                `Finished Task ${task.id}: ${task.agent}`
+                `✅ Finished Task ${task.id}`
               );
 
 
               return {
-
                 taskId: task.id,
-
-                agent: task.agent,
-
-                question: task.question,
-
-                result,
-
-                success: true
-
+                success: true,
+                result
               };
 
             } catch (error) {
 
+              state.status = "FAILED";
+
+              state.error =
+                error.message;
+
+
               console.error(
-                `Task ${task.id} failed:`,
+                `❌ Task ${task.id} failed:`,
                 error.message
               );
 
 
               return {
-
                 taskId: task.id,
-
-                agent: task.agent,
-
-                question: task.question,
-
-                result: null,
-
                 success: false,
-
                 error: error.message
-
               };
 
             }
@@ -253,26 +332,48 @@ export async function supervisor(userMessage) {
 
 
     // =====================================
-    // 5. SAVE RESULTS
+    // Print round results
     // =====================================
 
-    for (const result of roundResults) {
+    console.log("\nRound Results:");
 
-      results.push(result);
-
-      completedTasks.add(
-        result.taskId
-      );
-
-    }
-
-
-    console.log(
-      "\nCompleted tasks:",
-      [...completedTasks]
+    console.dir(
+      roundResults,
+      { depth: null }
     );
 
   }
+
+
+  // =====================================
+  // 5. BUILD FINAL RESULTS
+  // =====================================
+
+  const finalResults =
+    plan.tasks.map(
+      (task) => {
+
+        const state =
+          taskState.get(task.id);
+
+        return {
+
+          taskId: task.id,
+
+          agent: task.agent,
+
+          question: task.question,
+
+          status: state.status,
+
+          result: state.result,
+
+          error: state.error
+
+        };
+
+      }
+    );
 
 
   // =====================================
@@ -295,19 +396,19 @@ export async function supervisor(userMessage) {
           role: "system",
 
           content: `
-            You are the final response agent.
+                You are the final response agent.
 
-            Combine all agent results into one
-            clear answer to the original user request.
+                Use the workflow results to answer
+                the original user request.
 
-            Rules:
+                Rules:
 
-            1. Include successful results.
-            2. Mention failed tasks when relevant.
-            3. Do not invent information.
-            4. Do not perform new research.
-            5. Use the results produced by the workflow.
-`
+                1. Include successful results.
+                2. Clearly explain failed tasks.
+                3. Clearly explain skipped tasks.
+                4. Do not invent missing information.
+                5. Do not perform new research.
+                `
         },
 
         {
@@ -315,29 +416,29 @@ export async function supervisor(userMessage) {
 
           content: `
 
-              Original user request:
+                  Original request:
 
-              ${userMessage}
-
-
-              Execution plan:
-
-              ${JSON.stringify(
-            plan,
-            null,
-            2
-          )}
+                  ${userMessage}
 
 
-              Agent results:
+                  Execution plan:
 
-              ${JSON.stringify(
-            results,
-            null,
-            2
-          )}
+                  ${JSON.stringify(
+                              plan,
+                              null,
+                              2
+                            )}
 
-              `
+
+                  Workflow results:
+
+                  ${JSON.stringify(
+                              finalResults,
+                              null,
+                              2
+                            )}
+
+                  `
 
         }
 
@@ -347,4 +448,147 @@ export async function supervisor(userMessage) {
 
 
   return finalResponse.message.content;
+}
+
+
+// =====================================
+// PLAN VALIDATION
+// =====================================
+
+function validatePlan(plan) {
+
+  if (
+    !plan ||
+    !Array.isArray(plan.tasks)
+  ) {
+
+    throw new Error(
+      "Planner returned an invalid task list."
+    );
+
+  }
+
+
+  const taskIds =
+    new Set();
+
+
+  for (const task of plan.tasks) {
+
+    // -------------------------------
+    // Validate ID
+    // -------------------------------
+
+    if (
+      typeof task.id !== "number"
+    ) {
+
+      throw new Error(
+        "Every task must have a numeric id."
+      );
+
+    }
+
+
+    // Duplicate ID
+    if (taskIds.has(task.id)) {
+
+      throw new Error(
+        `Duplicate task id: ${task.id}`
+      );
+
+    }
+
+    taskIds.add(task.id);
+
+
+    // -------------------------------
+    // Validate agent
+    // -------------------------------
+
+    if (
+      typeof task.agent !== "string"
+    ) {
+
+      throw new Error(
+        `Task ${task.id} has an invalid agent.`
+      );
+
+    }
+
+
+    if (!agents[task.agent]) {
+
+      throw new Error(
+        `Task ${task.id} references unknown agent: ${task.agent}`
+      );
+
+    }
+
+
+    // -------------------------------
+    // Validate question
+    // -------------------------------
+
+    if (
+      typeof task.question !== "string" ||
+      !task.question.trim()
+    ) {
+
+      throw new Error(
+        `Task ${task.id} has no valid question.`
+      );
+
+    }
+
+
+    // -------------------------------
+    // Validate dependencies
+    // -------------------------------
+
+    if (
+      !Array.isArray(task.dependsOn)
+    ) {
+
+      throw new Error(
+        `Task ${task.id} must have a dependsOn array.`
+      );
+
+    }
+
+  }
+
+
+  // =================================
+  // Validate dependency IDs
+  // =================================
+
+  for (const task of plan.tasks) {
+
+    for (
+      const dependencyId
+      of task.dependsOn
+    ) {
+
+      if (!taskIds.has(dependencyId)) {
+
+        throw new Error(
+          `Task ${task.id} depends on missing task ${dependencyId}`
+        );
+
+      }
+
+
+      if (dependencyId === task.id) {
+
+        throw new Error(
+          `Task ${task.id} cannot depend on itself.`
+        );
+
+      }
+
+    }
+
+  }
+
 }

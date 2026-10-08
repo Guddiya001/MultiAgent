@@ -16,14 +16,13 @@ const agents = {
 export async function supervisor(userMessage) {
 
   console.log("\n==============================");
-  console.log("LEVEL 8 SUPERVISOR");
+  console.log("LEVEL 8.4 PARALLEL DAG");
   console.log("==============================");
 
 
-  // =================================
-  // STEP 1
-  // Create execution plan
-  // =================================
+  // =====================================
+  // 1. CREATE PLAN
+  // =====================================
 
   console.log("\n1. Creating execution plan...");
 
@@ -33,11 +32,6 @@ export async function supervisor(userMessage) {
 
   console.dir(plan, { depth: null });
 
-
-  // =================================
-  // STEP 2
-  // Validate plan
-  // =================================
 
   if (
     !plan.tasks ||
@@ -49,236 +43,241 @@ export async function supervisor(userMessage) {
   }
 
 
-  // =================================
-  // STEP 3
-  // Store task results
-  // =================================
-
-  const results = [];
+  // =====================================
+  // 2. WORKFLOW STATE
+  // =====================================
 
   const completedTasks = new Set();
 
+  const results = [];
 
-  // =================================
-  // STEP 4
-  // Execute dependency-aware tasks
-  // =================================
 
-  console.log("\n2. Executing tasks...");
+  // =====================================
+  // 3. DAG EXECUTION
+  // =====================================
+
+  console.log("\n2. Starting DAG execution...");
 
 
   while (
     completedTasks.size < plan.tasks.length
   ) {
 
-    let progress = false;
+    // -------------------------------------
+    // Find tasks ready to execute
+    // -------------------------------------
+
+    const readyTasks = plan.tasks.filter(
+      (task) => {
+
+        // Already completed
+        if (completedTasks.has(task.id)) {
+          return false;
+        }
 
 
-    for (const task of plan.tasks) {
-
-      // Already completed
-      if (completedTasks.has(task.id)) {
-        continue;
-      }
+        // Dependencies
+        const dependencies =
+          task.dependsOn || [];
 
 
-      // ---------------------------------
-      // Check dependencies
-      // ---------------------------------
-
-      const dependencies =
-        task.dependsOn || [];
-
-
-      const dependenciesCompleted =
-        dependencies.every(
+        // Check whether every dependency
+        // has completed
+        return dependencies.every(
           (dependencyId) =>
             completedTasks.has(dependencyId)
         );
 
-
-      // Dependencies not ready
-      if (!dependenciesCompleted) {
-
-        console.log(
-          `Task ${task.id} waiting for:`,
-          dependencies.filter(
-            (id) =>
-              !completedTasks.has(id)
-          )
-        );
-
-        continue;
       }
+    );
 
 
-      // ---------------------------------
-      // Find agent
-      // ---------------------------------
-
-      const agent =
-        agents[task.agent];
-
-
-      if (!agent) {
-
-        results.push({
-
-          taskId: task.id,
-
-          agent: task.agent,
-
-          question: task.question,
-
-          success: false,
-
-          error:
-            `Unknown agent: ${task.agent}`
-
-        });
-
-
-        completedTasks.add(task.id);
-
-        progress = true;
-
-        continue;
-      }
-
-
-      // ---------------------------------
-      // Prepare dependency results
-      // ---------------------------------
-
-      const dependencyResults =
-        results.filter(
-          (result) =>
-            dependencies.includes(
-              result.taskId
-            )
-        );
-
-
-      // ---------------------------------
-      // Build agent input
-      // ---------------------------------
-
-      const agentInput = `
-
-Original user request:
-
-${userMessage}
-
-
-Your task:
-
-${task.question}
-
-
-Results from previous tasks:
-
-${JSON.stringify(
-  dependencyResults,
-  null,
-  2
-)}
-
-Use the previous task results
-when required.
-
-Do not invent missing information.
-
-`;
-
-
-      // ---------------------------------
-      // Execute agent
-      // ---------------------------------
-
-      console.log(
-        `\nStarting Task ${task.id}: ${task.agent}`
-      );
-
-
-      try {
-
-        const result =
-          await agent(agentInput);
-
-
-        console.log(
-          `Finished Task ${task.id}`
-        );
-
-
-        results.push({
-
-          taskId: task.id,
-
-          agent: task.agent,
-
-          question: task.question,
-
-          result,
-
-          success: true
-
-        });
-
-
-      } catch (error) {
-
-        console.error(
-          `Task ${task.id} failed:`,
-          error.message
-        );
-
-
-        results.push({
-
-          taskId: task.id,
-
-          agent: task.agent,
-
-          question: task.question,
-
-          result: null,
-
-          success: false,
-
-          error: error.message
-
-        });
-
-      }
-
-
-      completedTasks.add(task.id);
-
-      progress = true;
-
-    }
-
-
-    // =================================
+    // -------------------------------------
     // Safety check
-    // =================================
+    // -------------------------------------
 
-    if (!progress) {
+    if (readyTasks.length === 0) {
 
       throw new Error(
-        "Workflow cannot continue. There may be a circular or unresolved dependency."
+        "No executable tasks found. " +
+        "Possible circular or unresolved dependency."
       );
 
     }
+
+
+    console.log(
+      `\nReady tasks: ${readyTasks
+        .map((task) => task.id)
+        .join(", ")}`
+    );
+
+
+    // =====================================
+    // 4. EXECUTE READY TASKS IN PARALLEL
+    // =====================================
+
+    const roundResults =
+      await Promise.all(
+
+        readyTasks.map(
+          async (task) => {
+
+            console.log(
+              `Starting Task ${task.id}: ${task.agent}`
+            );
+
+
+            const agent =
+              agents[task.agent];
+
+
+            if (!agent) {
+
+              return {
+
+                taskId: task.id,
+
+                agent: task.agent,
+
+                success: false,
+
+                error:
+                  `Unknown agent: ${task.agent}`
+
+              };
+
+            }
+
+
+            // ---------------------------------
+            // Get dependency results
+            // ---------------------------------
+
+            const dependencyResults =
+              results.filter(
+                (result) =>
+                  (task.dependsOn || [])
+                    .includes(result.taskId)
+              );
+
+
+            // ---------------------------------
+            // Build agent input
+            // ---------------------------------
+
+            const agentInput = `
+
+                  Original user request:
+
+                  ${userMessage}
+
+
+                  Your task:
+
+                  ${task.question}
+
+
+                  Results from dependent tasks:
+
+                  ${JSON.stringify(
+              dependencyResults,
+              null,
+              2
+            )}
+
+
+                  Use the dependent task results
+                  when required.
+
+                  Do not invent missing information.
+
+                  `;
+
+
+            try {
+
+              const result =
+                await agent(agentInput);
+
+
+              console.log(
+                `Finished Task ${task.id}: ${task.agent}`
+              );
+
+
+              return {
+
+                taskId: task.id,
+
+                agent: task.agent,
+
+                question: task.question,
+
+                result,
+
+                success: true
+
+              };
+
+            } catch (error) {
+
+              console.error(
+                `Task ${task.id} failed:`,
+                error.message
+              );
+
+
+              return {
+
+                taskId: task.id,
+
+                agent: task.agent,
+
+                question: task.question,
+
+                result: null,
+
+                success: false,
+
+                error: error.message
+
+              };
+
+            }
+
+          }
+        )
+
+      );
+
+
+    // =====================================
+    // 5. SAVE RESULTS
+    // =====================================
+
+    for (const result of roundResults) {
+
+      results.push(result);
+
+      completedTasks.add(
+        result.taskId
+      );
+
+    }
+
+
+    console.log(
+      "\nCompleted tasks:",
+      [...completedTasks]
+    );
 
   }
 
 
-  // =================================
-  // STEP 5
-  // Final Agent
-  // =================================
+  // =====================================
+  // 6. FINAL AGENT
+  // =====================================
 
   console.log(
     "\n3. Generating final response..."
@@ -296,19 +295,18 @@ Do not invent missing information.
           role: "system",
 
           content: `
-You are the final response agent.
+            You are the final response agent.
 
-Combine the results from the
-specialized agents into one clear answer.
+            Combine all agent results into one
+            clear answer to the original user request.
 
-Rules:
+            Rules:
 
-1. Answer the original user request.
-2. Include successful results.
-3. Clearly mention failed tasks.
-4. Do not invent information.
-5. Do not perform new research.
-6. Use dependency results when relevant.
+            1. Include successful results.
+            2. Mention failed tasks when relevant.
+            3. Do not invent information.
+            4. Do not perform new research.
+            5. Use the results produced by the workflow.
 `
         },
 
@@ -317,29 +315,30 @@ Rules:
 
           content: `
 
-Original user request:
+              Original user request:
 
-${userMessage}
-
-
-Execution plan:
-
-${JSON.stringify(
-  plan,
-  null,
-  2
-)}
+              ${userMessage}
 
 
-Agent results:
+              Execution plan:
 
-${JSON.stringify(
-  results,
-  null,
-  2
-)}
+              ${JSON.stringify(
+            plan,
+            null,
+            2
+          )}
 
-`
+
+              Agent results:
+
+              ${JSON.stringify(
+            results,
+            null,
+            2
+          )}
+
+              `
+
         }
 
       ]
